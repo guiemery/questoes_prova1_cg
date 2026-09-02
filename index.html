@@ -61,6 +61,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
+    flex-wrap: wrap;
   }
   .toc-label {
     font-size: 0.8rem;
@@ -75,6 +76,8 @@
     gap: 8px;
     overflow-x: auto;
     padding-bottom: 2px;
+    flex: 1;
+    min-width: 0;
   }
   .toc-links a {
     background: var(--gray-bg);
@@ -291,6 +294,58 @@
     margin-top: 2px;
   }
 
+  .caderno-box {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px dashed #ccc;
+  }
+  .caderno-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--wine-dark);
+    margin-bottom: 6px;
+  }
+  .caderno-box textarea {
+    width: 100%;
+    min-height: 60px;
+    resize: vertical;
+    border: 1.5px solid #e0dad2;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 0.88rem;
+    color: #333;
+    background: #fffdf6;
+  }
+  .caderno-box textarea:focus {
+    outline: none;
+    border-color: var(--gold);
+    background: #fff;
+  }
+  .caderno-saved {
+    font-size: 0.7rem;
+    color: #999;
+    margin-top: 3px;
+    height: 14px;
+  }
+
+  .export-btn {
+    background: #fff;
+    color: var(--wine);
+    border: 1.5px solid var(--wine);
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .export-btn:hover { background: var(--wine); color: #fff; }
+
   mark.user-hl {
     background: #fff176;
     padding: 0 1px;
@@ -334,6 +389,7 @@
   <div class="toc-inner">
     <span class="toc-label">Ir para o caso</span>
     <div class="toc-links" id="tocLinks"></div>
+    <button class="export-btn" id="exportBtn" type="button">📄 Exportar Caderno de Erros</button>
   </div>
 </nav>
 </div>
@@ -353,6 +409,7 @@ const root = document.getElementById('quizRoot');
 const tocLinks = document.getElementById('tocLinks');
 
 const caseOrder = Object.keys(data).sort((a,b) => parseInt(a) - parseInt(b));
+const cadernoRegistry = {}; // caseNum -> [{ qid, grp, textarea }]
 
 caseOrder.forEach(caseNum => {
   const caseData = data[caseNum];
@@ -534,6 +591,47 @@ function buildQuestionCard(q, caseNum, grp) {
     showBtn.textContent = 'Mostrar gabarito e justificativa';
   });
 
+  // ---- Caderno de Erros ----
+  const cadernoBox = document.createElement('div');
+  cadernoBox.className = 'caderno-box';
+
+  const cadernoLabel = document.createElement('div');
+  cadernoLabel.className = 'caderno-label';
+  cadernoLabel.textContent = '📝 Caderno de Erros';
+
+  const cadernoTextarea = document.createElement('textarea');
+  cadernoTextarea.placeholder = 'Anote aqui por que errou, o que precisa revisar, pontos de atenção...';
+
+  const cadernoSaved = document.createElement('div');
+  cadernoSaved.className = 'caderno-saved';
+
+  const storageKey = 'caderno_erros_v1__caso' + caseNum + '__' + grp + '__' + q.id;
+  const savedValue = localStorage.getItem(storageKey);
+  if (savedValue) cadernoTextarea.value = savedValue;
+
+  let saveTimeout = null;
+  cadernoTextarea.addEventListener('input', () => {
+    clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => {
+      if (cadernoTextarea.value.trim()) {
+        localStorage.setItem(storageKey, cadernoTextarea.value);
+      } else {
+        localStorage.removeItem(storageKey);
+      }
+      cadernoSaved.textContent = 'Salvo automaticamente ✓';
+      setTimeout(() => { cadernoSaved.textContent = ''; }, 1500);
+    }, 400);
+  });
+
+  cadernoBox.appendChild(cadernoLabel);
+  cadernoBox.appendChild(cadernoTextarea);
+  cadernoBox.appendChild(cadernoSaved);
+  card.appendChild(cadernoBox);
+
+  // register for export
+  if (!cadernoRegistry[caseNum]) cadernoRegistry[caseNum] = [];
+  cadernoRegistry[caseNum].push({ qid: q.id, grp: grp, textarea: cadernoTextarea });
+
   return card;
 }
 
@@ -602,6 +700,113 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('scroll', hidePopup, true);
+
+// ---- Export "Caderno de Erros" as PDF (via browser print) ----
+document.getElementById('exportBtn').addEventListener('click', () => {
+  const orderedCases = Object.keys(cadernoRegistry).sort((a,b) => parseInt(a) - parseInt(b));
+
+  let sectionsHtml = '';
+  let hasAny = false;
+
+  orderedCases.forEach(caseNum => {
+    const entries = cadernoRegistry[caseNum]
+      .filter(e => e.textarea.value.trim() !== '')
+      .sort((a,b) => a.qid.localeCompare(b.qid, undefined, {numeric: true}));
+
+    if (entries.length === 0) return;
+    hasAny = true;
+
+    let itemsHtml = '';
+    entries.forEach(e => {
+      const safeText = e.textarea.value
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/\n/g, '<br>');
+      itemsHtml += `
+        <div class="pe-item">
+          <div class="pe-qid">Questão ${e.qid}</div>
+          <div class="pe-text">${safeText}</div>
+        </div>`;
+    });
+
+    sectionsHtml += `
+      <div class="pe-case">
+        <h2>CASO ${caseNum}</h2>
+        ${itemsHtml}
+      </div>`;
+  });
+
+  if (!hasAny) {
+    alert('Nenhuma anotação no Caderno de Erros ainda. Escreva algo em pelo menos uma questão antes de exportar.');
+    return;
+  }
+
+  const printWindow = window.open('', '_blank');
+  printWindow.document.write(`
+    <!DOCTYPE html>
+    <html lang="pt-BR">
+    <head>
+    <meta charset="UTF-8">
+    <title>Caderno de Erros — Banco de Questões de Cirurgia</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+        color: #1a1a1a;
+        padding: 30px 40px;
+        line-height: 1.5;
+      }
+      h1 {
+        color: #7a1f2b;
+        border-bottom: 3px solid #7a1f2b;
+        padding-bottom: 8px;
+        font-size: 20pt;
+      }
+      .pe-case {
+        margin-top: 26px;
+        page-break-inside: avoid;
+      }
+      .pe-case h2 {
+        background: #7a1f2b;
+        color: #fff;
+        padding: 6px 12px;
+        border-radius: 4px;
+        font-size: 13pt;
+        margin-bottom: 10px;
+      }
+      .pe-item {
+        margin-bottom: 14px;
+        padding: 8px 12px;
+        border-left: 4px solid #c99a3f;
+        background: #fdf9f1;
+        border-radius: 0 6px 6px 0;
+        page-break-inside: avoid;
+      }
+      .pe-qid {
+        font-weight: 700;
+        color: #7a1f2b;
+        font-size: 10.5pt;
+        margin-bottom: 4px;
+      }
+      .pe-text {
+        font-size: 10.5pt;
+        white-space: pre-wrap;
+      }
+      @media print {
+        body { padding: 10mm 14mm; }
+      }
+    </style>
+    </head>
+    <body>
+      <h1>Caderno de Erros — Banco de Questões de Cirurgia</h1>
+      ${sectionsHtml}
+    </body>
+    </html>
+  `);
+  printWindow.document.close();
+  printWindow.onload = () => {
+    printWindow.focus();
+    printWindow.print();
+  };
+});
 </script>
 
 </body>
